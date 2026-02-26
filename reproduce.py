@@ -16,56 +16,27 @@ Usage:
 """
 
 import asyncio
-import errno
 import os
 import platform
 import socket
 import sys
 import traceback
-
 import uuid
+
+import errno
 
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 from azure.servicebus.aio import ServiceBusClient as AsyncServiceBusClient
-from azure.servicebus._pyamqp._transport import (
-    SOL_TCP,
-    _AbstractTransport,
-)
+from azure.servicebus._pyamqp import _platform
+from azure.servicebus._pyamqp._transport import SOL_TCP, _AbstractTransport
 from azure.servicebus._pyamqp.aio._transport_async import AsyncTransport
 
 SESSION_ID = f"test-{uuid.uuid4().hex[:8]}"
-APPLY_PATCH = os.environ.get("APPLY_PATCH", "").lower() in ("1", "true", "yes")
-
-
-def env():
-    conn_str = os.environ.get("CONNECTION_STRING", "")
-    queue_name = os.environ.get("QUEUE_NAME", "")
-    if not conn_str or not queue_name:
-        print("ERROR: CONNECTION_STRING and QUEUE_NAME must be set")
-        sys.exit(1)
-    return conn_str, queue_name
-
-
-def print_env_info():
-    import azure.servicebus as sb
-
-    print("=" * 60)
-    print("ENVIRONMENT")
-    print("=" * 60)
-    print(f"  Python          : {sys.version}")
-    print(f"  azure-servicebus: {sb.__version__}")
-    print(f"  Platform        : {sys.platform}")
-    print(f"  Architecture    : {platform.machine()}")
-    print(f"  Hostname        : {socket.gethostname()}")
-    in_container = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
-    print(f"  In container    : {in_container}")
-    print(f"  Session ID      : {SESSION_ID}")
-    print(f"  Patch applied   : {APPLY_PATCH}")
-    print()
+APPLY_PATCH = os.environ.get("APPLY_PATCH", "0")
 
 
 # ---------------------------------------------------------------------------
-# Monkey-patch: make setsockopt resilient to EINVAL / ENOPROTOOPT
+# Patch 1: wrap every setsockopt call to skip EINVAL / ENOPROTOOPT
 # ---------------------------------------------------------------------------
 
 
@@ -95,9 +66,45 @@ def _patched_async_set_socket_options(self, sock, socket_settings):
         _resilient_setsockopt(sock, opt, val)
 
 
-if APPLY_PATCH:
+# ---------------------------------------------------------------------------
+# Apply patches
+# ---------------------------------------------------------------------------
+
+if APPLY_PATCH == "1":
+    # resilient setsockopt — catches and skips any unsupported option
     _AbstractTransport._set_socket_options = _patched_sync_set_socket_options
     AsyncTransport._set_socket_options = _patched_async_set_socket_options
+elif APPLY_PATCH == "2":
+    # targeted — just remove TCP_MAXSEG from the set of options to configure
+    _platform.KNOWN_TCP_OPTS.discard("TCP_MAXSEG")
+
+
+def env():
+    conn_str = os.environ.get("CONNECTION_STRING", "")
+    queue_name = os.environ.get("QUEUE_NAME", "")
+    if not conn_str or not queue_name:
+        print("ERROR: CONNECTION_STRING and QUEUE_NAME must be set")
+        sys.exit(1)
+    return conn_str, queue_name
+
+
+def print_env_info():
+    import azure.servicebus as sb
+
+    print("=" * 60)
+    print("ENVIRONMENT")
+    print("=" * 60)
+    print(f"  Python          : {sys.version}")
+    print(f"  azure-servicebus: {sb.__version__}")
+    print(f"  Platform        : {sys.platform}")
+    print(f"  Architecture    : {platform.machine()}")
+    print(f"  Hostname        : {socket.gethostname()}")
+    in_container = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
+    print(f"  In container    : {in_container}")
+    print(f"  Session ID      : {SESSION_ID}")
+    patch_desc = {"0": "none", "1": "resilient setsockopt", "2": "remove TCP_MAXSEG"}
+    print(f"  Patch           : {patch_desc.get(APPLY_PATCH, APPLY_PATCH)}")
+    print()
 
 
 # ---------------------------------------------------------------------------

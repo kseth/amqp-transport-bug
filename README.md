@@ -38,22 +38,42 @@ Expected: all tests pass (bug does **not** reproduce outside containers).
 ```bash
 make docker-build
 
-# reproduce the bug:
-CONNECTION_STRING="Endpoint=sb://..." QUEUE_NAME="test-queue" make docker-run
-
-# verify the fix:
-CONNECTION_STRING="Endpoint=sb://..." QUEUE_NAME="test-queue" APPLY_PATCH=1 make docker-run
+# reproduce the bug (no patch):
+CONNECTION_STRING="..." QUEUE_NAME="..." make docker-run
 ```
 
-## What the tests do
+Expected: sync passes, async fails with `[Errno 22] Invalid argument`.
 
-| # | Test | Transport | Expected in container |
-|---|------|-----------|----------------------|
-| 1 | sync send/receive | pure-python AMQP | PASS |
-| 2 | async send/receive | pure-python AMQP | **FAIL** |
+## Patches
 
-Set `APPLY_PATCH=1` to apply a monkey-patch that wraps `setsockopt` calls
-with error handling for `EINVAL`/`ENOPROTOOPT`. With the patch, both tests pass.
+Two patches are available via the `APPLY_PATCH` environment variable.
+
+### `APPLY_PATCH=1` — resilient setsockopt
+
+Wraps every `setsockopt` call in `_set_socket_options` with a try/except that
+catches `EINVAL` and `ENOPROTOOPT`, logging the skipped option instead of crashing.
+This is the safer, more general fix — it handles any unsupported socket option.
+
+```bash
+CONNECTION_STRING="..." QUEUE_NAME="..." APPLY_PATCH=1 make docker-run
+```
+
+### `APPLY_PATCH=2` — remove TCP_MAXSEG
+
+Removes `TCP_MAXSEG` from the SDK's `KNOWN_TCP_OPTS` set before any client is
+created. This is the more targeted fix — it prevents the specific option that
+fails from ever being set.
+
+```bash
+CONNECTION_STRING="..." QUEUE_NAME="..." APPLY_PATCH=2 make docker-run
+```
+
+### Results
+
+| | Native | Docker (no patch) | Docker `APPLY_PATCH=1` | Docker `APPLY_PATCH=2` |
+|---|---|---|---|---|
+| sync | PASS | PASS | PASS | PASS |
+| async | PASS | **FAIL** | PASS | PASS |
 
 ## Cleanup
 
