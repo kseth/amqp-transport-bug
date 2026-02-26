@@ -37,15 +37,12 @@ Expected: all tests pass (bug does **not** reproduce outside containers).
 
 ```bash
 make docker-build
+
+# reproduce the bug:
 CONNECTION_STRING="Endpoint=sb://..." QUEUE_NAME="test-queue" make docker-run
-```
 
-Expected: sync passes, async fails — **bug confirmed**.
-
-Set `NUM_MESSAGES` to run more iterations (default is 1):
-
-```bash
-CONNECTION_STRING="..." QUEUE_NAME="..." NUM_MESSAGES=25 make docker-run
+# verify the fix:
+CONNECTION_STRING="Endpoint=sb://..." QUEUE_NAME="test-queue" APPLY_PATCH=1 make docker-run
 ```
 
 ## What the tests do
@@ -54,6 +51,9 @@ CONNECTION_STRING="..." QUEUE_NAME="..." NUM_MESSAGES=25 make docker-run
 |---|------|-----------|----------------------|
 | 1 | sync send/receive | pure-python AMQP | PASS |
 | 2 | async send/receive | pure-python AMQP | **FAIL** |
+
+Set `APPLY_PATCH=1` to apply a monkey-patch that wraps `setsockopt` calls
+with error handling for `EINVAL`/`ENOPROTOOPT`. With the patch, both tests pass.
 
 ## Cleanup
 

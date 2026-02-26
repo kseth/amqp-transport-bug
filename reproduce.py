@@ -16,6 +16,7 @@ Usage:
 """
 
 import asyncio
+import errno
 import os
 import platform
 import socket
@@ -26,9 +27,14 @@ import uuid
 
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 from azure.servicebus.aio import ServiceBusClient as AsyncServiceBusClient
+from azure.servicebus._pyamqp._transport import (
+    SOL_TCP,
+    _AbstractTransport,
+)
+from azure.servicebus._pyamqp.aio._transport_async import AsyncTransport
 
-NUM_MESSAGES = int(os.environ.get("NUM_MESSAGES", "1"))
 SESSION_ID = f"test-{uuid.uuid4().hex[:8]}"
+APPLY_PATCH = os.environ.get("APPLY_PATCH", "").lower() in ("1", "true", "yes")
 
 
 def env():
@@ -53,9 +59,45 @@ def print_env_info():
     print(f"  Hostname        : {socket.gethostname()}")
     in_container = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
     print(f"  In container    : {in_container}")
-    print(f"  Messages/test   : {NUM_MESSAGES}")
     print(f"  Session ID      : {SESSION_ID}")
+    print(f"  Patch applied   : {APPLY_PATCH}")
     print()
+
+
+# ---------------------------------------------------------------------------
+# Monkey-patch: make setsockopt resilient to EINVAL / ENOPROTOOPT
+# ---------------------------------------------------------------------------
+
+
+def _resilient_setsockopt(sock, opt, val):
+    try:
+        sock.setsockopt(SOL_TCP, opt, val)
+    except OSError as e:
+        if e.errno in (errno.EINVAL, errno.ENOPROTOOPT):
+            print(f"  [patch] skipping setsockopt({opt}, {val}): {e}")
+        else:
+            raise
+
+
+def _patched_sync_set_socket_options(self, socket_settings):
+    tcp_opts = self._get_tcp_socket_defaults(self.sock)
+    if socket_settings:
+        tcp_opts.update(socket_settings)
+    for opt, val in tcp_opts.items():
+        _resilient_setsockopt(self.sock, opt, val)
+
+
+def _patched_async_set_socket_options(self, sock, socket_settings):
+    tcp_opts = self._get_tcp_socket_defaults(sock)
+    if socket_settings:
+        tcp_opts.update(socket_settings)
+    for opt, val in tcp_opts.items():
+        _resilient_setsockopt(sock, opt, val)
+
+
+if APPLY_PATCH:
+    _AbstractTransport._set_socket_options = _patched_sync_set_socket_options
+    AsyncTransport._set_socket_options = _patched_async_set_socket_options
 
 
 # ---------------------------------------------------------------------------
@@ -65,31 +107,29 @@ def print_env_info():
 
 def test_sync(conn_str, queue_name):
     """Sync send+receive — expected to work everywhere."""
-    print(f"--- Test 1: sync send/receive x{NUM_MESSAGES} (pure-python AMQP) ---")
+    print("--- Test 1: sync send/receive (pure-python AMQP) ---")
     try:
+        body = f"sync-{SESSION_ID}"
         with ServiceBusClient.from_connection_string(conn_str) as client:
             sender = client.get_queue_sender(queue_name)
             receiver = client.get_queue_receiver(
                 queue_name, session_id=SESSION_ID, max_wait_time=5
             )
             with sender, receiver:
-                for i in range(NUM_MESSAGES):
-                    body = f"sync-{i}"
-                    msg = ServiceBusMessage(body)
-                    msg.session_id = SESSION_ID
-                    sender.send_messages(msg)
-                    msgs = receiver.receive_messages(
-                        max_message_count=1, max_wait_time=5
+                msg = ServiceBusMessage(body)
+                msg.session_id = SESSION_ID
+                sender.send_messages(msg)
+                msgs = receiver.receive_messages(
+                    max_message_count=1, max_wait_time=5
+                )
+                if not msgs:
+                    raise RuntimeError(f"no message received for '{body}'")
+                received = str(msgs[0])
+                if received != body:
+                    raise RuntimeError(
+                        f"body mismatch: sent '{body}', got '{received}'"
                     )
-                    if not msgs:
-                        raise RuntimeError(f"no message received for '{body}'")
-                    received = str(msgs[0])
-                    if received != body:
-                        raise RuntimeError(
-                            f"body mismatch: sent '{body}', got '{received}'"
-                        )
-                    receiver.complete_message(msgs[0])
-                    print(f"  [{i + 1}/{NUM_MESSAGES}] ok")
+                receiver.complete_message(msgs[0])
         print("RESULT: PASS\n")
         return True
     except Exception as exc:
@@ -100,31 +140,29 @@ def test_sync(conn_str, queue_name):
 
 async def test_async(conn_str, queue_name):
     """Async send+receive — triggers the bug in containers."""
-    print(f"--- Test 2: async send/receive x{NUM_MESSAGES} (pure-python AMQP) ---")
+    print("--- Test 2: async send/receive (pure-python AMQP) ---")
     try:
+        body = f"async-{SESSION_ID}"
         async with AsyncServiceBusClient.from_connection_string(conn_str) as client:
             sender = client.get_queue_sender(queue_name)
             receiver = client.get_queue_receiver(
                 queue_name, session_id=SESSION_ID, max_wait_time=5
             )
             async with sender, receiver:
-                for i in range(NUM_MESSAGES):
-                    body = f"async-{i}"
-                    msg = ServiceBusMessage(body)
-                    msg.session_id = SESSION_ID
-                    await sender.send_messages(msg)
-                    msgs = await receiver.receive_messages(
-                        max_message_count=1, max_wait_time=5
+                msg = ServiceBusMessage(body)
+                msg.session_id = SESSION_ID
+                await sender.send_messages(msg)
+                msgs = await receiver.receive_messages(
+                    max_message_count=1, max_wait_time=5
+                )
+                if not msgs:
+                    raise RuntimeError(f"no message received for '{body}'")
+                received = str(msgs[0])
+                if received != body:
+                    raise RuntimeError(
+                        f"body mismatch: sent '{body}', got '{received}'"
                     )
-                    if not msgs:
-                        raise RuntimeError(f"no message received for '{body}'")
-                    received = str(msgs[0])
-                    if received != body:
-                        raise RuntimeError(
-                            f"body mismatch: sent '{body}', got '{received}'"
-                        )
-                    await receiver.complete_message(msgs[0])
-                    print(f"  [{i + 1}/{NUM_MESSAGES}] ok")
+                await receiver.complete_message(msgs[0])
         print("RESULT: PASS\n")
         return True
     except Exception as exc:
@@ -142,36 +180,10 @@ def main():
     conn_str, queue_name = env()
     print_env_info()
 
-    results = {}
+    sync_ok = test_sync(conn_str, queue_name)
+    async_ok = asyncio.run(test_async(conn_str, queue_name))
 
-    results["sync"] = test_sync(conn_str, queue_name)
-    results["async"] = asyncio.run(test_async(conn_str, queue_name))
-
-    # --- summary ---
-    print("=" * 60)
-    print("SUMMARY")
-    print("=" * 60)
-    for name, passed in results.items():
-        tag = "PASS" if passed else "FAIL"
-        print(f"  {name:20s} {tag}")
-
-    if results["sync"] and not results["async"]:
-        print()
-        print(">>> BUG CONFIRMED: sync works, async fails <<<")
-        print(
-            ">>> Reproduces https://github.com/Azure/azure-sdk-for-python/issues/45394"
-        )
-        sys.exit(1)
-    elif not results["sync"]:
-        print()
-        print(
-            "Sync also failed — likely a connectivity / credential issue, not the bug."
-        )
-        sys.exit(2)
-    else:
-        print()
-        print("Bug NOT reproduced in this environment.")
-        sys.exit(0)
+    sys.exit(0 if sync_ok and async_ok else 1)
 
 
 if __name__ == "__main__":
