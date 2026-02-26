@@ -116,7 +116,8 @@ def test_sync(conn_str, queue_name):
     """Sync send+receive — expected to work everywhere."""
     print("--- Test 1: sync send/receive (pure-python AMQP) ---")
     try:
-        body = f"sync-{SESSION_ID}"
+        # 256KB payload — spans multiple TCP segments to verify patches are safe
+        body = f"sync-{SESSION_ID}-" + "X" * (256 * 1024 - 100)
         with ServiceBusClient.from_connection_string(conn_str) as client:
             sender = client.get_queue_sender(queue_name)
             receiver = client.get_queue_receiver(
@@ -149,7 +150,8 @@ async def test_async(conn_str, queue_name):
     """Async send+receive — triggers the bug in containers."""
     print("--- Test 2: async send/receive (pure-python AMQP) ---")
     try:
-        body = f"async-{SESSION_ID}"
+        # 256KB payload — spans multiple TCP segments to verify patches are safe
+        body = f"async-{SESSION_ID}-" + "X" * (256 * 1024 - 100)
         async with AsyncServiceBusClient.from_connection_string(conn_str) as client:
             sender = client.get_queue_sender(queue_name)
             receiver = client.get_queue_receiver(
