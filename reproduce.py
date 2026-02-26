@@ -27,7 +27,7 @@ import uuid
 from azure.servicebus import ServiceBusClient, ServiceBusMessage
 from azure.servicebus.aio import ServiceBusClient as AsyncServiceBusClient
 
-NUM_MESSAGES = int(os.environ.get("NUM_MESSAGES", "25"))
+NUM_MESSAGES = int(os.environ.get("NUM_MESSAGES", "1"))
 SESSION_ID = f"test-{uuid.uuid4().hex[:8]}"
 
 

@@ -6,11 +6,11 @@ native: ## Run reproduce.py locally (requires CONNECTION_STRING + QUEUE_NAME)
 	uv run reproduce.py
 
 # ── Docker ──────────────────────────────────────────────────
-.PHONY: docker-build docker
-docker-build:
+.PHONY: docker-build docker-run
+docker-build: ## Build the Docker image
 	docker build -t $(IMAGE):latest .
 
-docker: docker-build ## Build & run in Docker
+docker-run: ## Run the Docker image (requires CONNECTION_STRING + QUEUE_NAME)
 	docker run --rm \
 		-e CONNECTION_STRING \
 		-e QUEUE_NAME \

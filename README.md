@@ -3,8 +3,8 @@
 Minimal reproduction for [azure-sdk-for-python#45394](https://github.com/Azure/azure-sdk-for-python/issues/45394).
 
 The async `ServiceBusClient` fails with `[Errno 22] Invalid argument` (socket error)
-when running inside containers, while the synchronous client works fine in the same
-environment.
+when running inside Docker on macOS, while the synchronous client works fine in the
+same container.
 
 ## Prerequisites
 
@@ -36,17 +36,24 @@ Expected: all tests pass (bug does **not** reproduce outside containers).
 ## Run — Docker
 
 ```bash
-CONNECTION_STRING="Endpoint=sb://..." QUEUE_NAME="test-queue" make docker
+make docker-build
+CONNECTION_STRING="Endpoint=sb://..." QUEUE_NAME="test-queue" make docker-run
 ```
 
 Expected: sync passes, async fails — **bug confirmed**.
+
+Set `NUM_MESSAGES` to run more iterations (default is 1):
+
+```bash
+CONNECTION_STRING="..." QUEUE_NAME="..." NUM_MESSAGES=25 make docker-run
+```
 
 ## What the tests do
 
 | # | Test | Transport | Expected in container |
 |---|------|-----------|----------------------|
-| 1 | sync send/receive x25 | pure-python AMQP | PASS |
-| 2 | async send/receive x25 | pure-python AMQP | **FAIL** |
+| 1 | sync send/receive | pure-python AMQP | PASS |
+| 2 | async send/receive | pure-python AMQP | **FAIL** |
 
 ## Cleanup
 
